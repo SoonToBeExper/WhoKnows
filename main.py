@@ -1,113 +1,106 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import openai
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import FileResponse
+from .api.routes import router as interview_router
+from .services.pdf_service import PDFService
 import os
-from dotenv import load_dotenv
+import logging
+import time
+import tempfile
+import json
 
-load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-app = FastAPI()
+app = FastAPI(
+    title="Cambridge CS Interview Practice",
+    description="A tool for practicing Cambridge University Computer Science interviews",
+    version="1.0.0"
+)
 
-# Simple session storage
-sessions = {}
-
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["*"],  # In production, replace with specific origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-def get_system_prompt(stage, topic):
-    return f"""
-    You are a Cambridge University Computer Science supervisor conducting a mock interview session.
+# Mount static files
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
-    The topic is {topic}. This is part of a 3-stage supervision session: warm-up, core, and stretch.
+# Setup templates
+templates = Jinja2Templates(directory="app/templates")
 
-    Your job is to challenge the student’s thinking, assess their reasoning, and simulate the tone and rigor of a real interview. You are calm, direct, and analytical — avoid excessive friendliness or over-explaining.
+# Include routers
+app.include_router(interview_router, prefix="/api", tags=["interview"])
 
-    Use a Socratic style: ask focused follow-up questions, probe assumptions, and push the student to justify their thoughts. Do not offer answers unless the student is truly stuck or explicitly asks for help.
+# Initialize PDF service
+pdf_service = PDFService()
 
-    Keep each response short — a single, meaningful question or analytical observation is best. Do not say things like “Great job!” or “That’s correct” unless it's part of the interviewer’s realistic behavior.
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    logger.info(f"Request to {request.url.path} took {process_time:.2f} seconds")
+    return response
 
-    Never give full feedback mid-session. Only summarize at the end or when specifically asked to debrief.
+@app.get("/")
+async def root(request: Request):
+    try:
+        logger.info("Rendering index page")
+        return templates.TemplateResponse("index.html", {"request": request})
+    except Exception as e:
+        logger.error(f"Error rendering index page: {str(e)}")
+        raise
 
-    Throughout the session, adapt your questioning based on the current stage ({stage}) and the student’s recent responses.
-    """
-    
-
-@app.post("/ask")
-async def ask(request: Request):
-    data = await request.json()
-    session_id = data.get("session_id")
-    user_input = data["message"]
-    
-    # Initialize or get session
-    if session_id not in sessions:
-        sessions[session_id] = {
-            "stage": "warm-up",
-            "topic": "Recursion",
-            "history": [],
-            "score": None
-        }
-    
-    session = sessions[session_id]
-    system_prompt = get_system_prompt(session["stage"], session["topic"])
-    
-    messages = [
-        {"role": "system", "content": system_prompt},
-        *session["history"],
-        {"role": "user", "content": user_input}
-    ]
-
-    response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=messages
+@app.get("/interview-report-form")
+async def get_interview_report_form():
+    pdf_path = os.path.join("app", "static", "pdfs", "interview_report_form.pdf")
+    if not os.path.exists(pdf_path):
+        raise HTTPException(status_code=404, detail="Interview report form template not found")
+    return FileResponse(
+        pdf_path,
+        media_type="application/pdf",
+        filename="interview_report_form.pdf"
     )
 
-    ai_response = response["choices"][0]["message"]["content"]
-    
-    # Update session history
-    session["history"].extend([
-        {"role": "user", "content": user_input},
-        {"role": "assistant", "content": ai_response}
-    ])
-
-    return {
-        "reply": ai_response,
-        "stage": session["stage"],
-        "session_id": session_id
-    }
-
-@app.post("/report")
-async def generate_report(request: Request):
-    data = await request.json()
-    session_id = data["session_id"]
-    
-    if session_id not in sessions:
-        return {"error": "Session not found"}
-    
-    session = sessions[session_id]
-    
-    # Generate final feedback
-    feedback_prompt = f"""Based on this interview session about {session['topic']}, 
-    provide a Cambridge-style supervision report including:
-    1. Overall score (1-10)
-    2. Strengths in logic and problem-solving
-    3. Areas for improvement
-    4. Final recommendation
-    
-    Interview history:
-    {session['history']}"""
-    
-    feedback_response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[{"role": "system", "content": feedback_prompt}]
-    )
-    
-    return {
-        "feedback": feedback_response["choices"][0]["message"]["content"],
-        "session_id": session_id
-    } 
+@app.post("/generate-filled-report")
+async def generate_filled_report(request: Request):
+    try:
+        # Get the request body
+        body = await request.json()
+        feedback_text = body.get("feedback_text", "")
+        
+        if not feedback_text:
+            raise HTTPException(status_code=400, detail="No feedback text provided")
+            
+        logger.info("Generating filled report with feedback text")
+        logger.debug(f"Feedback text: {feedback_text[:100]}...")  # Log first 100 chars
+        
+        # Parse the feedback text into structured data
+        feedback_data = pdf_service.parse_feedback_text(feedback_text)
+        logger.info(f"Parsed feedback data: {json.dumps(feedback_data, indent=2)}")
+        
+        # Create a temporary file for the filled PDF
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            output_path = tmp.name
+        
+        # Fill the PDF form
+        pdf_service.fill_interview_report(feedback_data, output_path)
+        logger.info(f"Generated filled PDF at: {output_path}")
+        
+        # Return the filled PDF
+        return FileResponse(
+            output_path,
+            media_type="application/pdf",
+            filename="filled_interview_report.pdf"
+        )
+    except Exception as e:
+        logger.error(f"Error generating filled report: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
