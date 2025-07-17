@@ -11,3 +11,8 @@ I think that's about it. If it's finished early then we can deal with some other
 
 # note
 uploaded the other files needed aswell, forgot to put them up yday - includes some html css etc + all the api stuff to connect the different api's to each other.
+
+# Updates
+wrote up code for unit tests for addmessages, advance stage and stage duration
+all tests successfully passed using pytest
+tweaked interview.py file by changing the advance_stage section of the code to now track the start and end time of each stage 
