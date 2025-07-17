@@ -1,0 +1,15 @@
+# Ignore Python bytecode
+__pycache__/
+*.py[cod]
+
+# Ignore virtual environment
+venv/
+
+# macOS system files
+.DS_Store
+
+# pytest cache
+.pytest_cache/
+
+# VS Code settings (optional)
+.vscode/

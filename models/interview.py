@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional
+from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel
 
@@ -31,14 +31,30 @@ class InterviewSession(BaseModel):
         ))
 
     def advance_stage(self) -> str:
+        now = datetime.now()
+
+        # End the current stage if it's active
+        if self.stages and self.stages[-1].name == self.stage and self.stages[-1].end_time is None:
+            self.stages[-1].end_time = now
+
+        # Advance stage logic
         if self.stage == "warm-up":
             self.stage = "core"
         elif self.stage == "core":
             self.stage = "stretch"
+        else:
+            return self.stage  # Already at final stage
+
+        # Start the new stage
+        self.stages.append(InterviewStage(
+            name=self.stage,
+            start_time=now
+        ))
+
         return self.stage
 
     def get_stage_duration(self) -> float:
         current_stage = next((s for s in self.stages if s.name == self.stage), None)
         if current_stage and current_stage.end_time:
             return (current_stage.end_time - current_stage.start_time).total_seconds()
-        return 0.0 
+        return 0.0
