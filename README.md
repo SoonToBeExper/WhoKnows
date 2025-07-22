@@ -16,3 +16,6 @@ uploaded the other files needed aswell, forgot to put them up yday - includes so
 wrote up code for unit tests for addmessages, advance stage and stage duration
 all tests successfully passed using pytest
 tweaked interview.py file by changing the advance_stage section of the code to now track the start and end time of each stage 
+
+# Update 2
+Currently directories are messed up and committing from vscode is difficult since file structure is horrible
